@@ -3,7 +3,7 @@
 import { Hono } from 'hono';
 import type { Storage } from './storage/interface';
 import type { AppConfig, SourceEntry, MacCMSSourceEntry, LiveSourceEntry, NameTransformConfig, EdgeProxyConfig } from './core/types';
-import { KV_MERGED_CONFIG, KV_MERGED_CONFIG_FULL, KV_MANUAL_SOURCES, KV_LAST_UPDATE, KV_MACCMS_SOURCES, KV_LIVE_SOURCES, KV_BLACKLIST, LIVE_PROXY_TTL, IMG_PROXY_TTL, KV_INLINE_PREFIX, KV_NAME_TRANSFORM, KV_CRON_INTERVAL, DEFAULT_CRON_INTERVAL, KV_SOURCE_HEALTH, KV_SPEED_TEST_ENABLED, KV_EDGE_PROXIES, KV_SEARCH_QUOTA_REPORT, KV_AGG_LOGS, KV_BG_SETTINGS, KV_DEDUP_CONFIG, KV_LIVE_DISABLED, KV_SMART_BASE_URL_ENABLED, KV_SITE_PROBE_DEPTH, KV_SITE_AUTO_CLEAN, KV_SITE_HEALTH_MAP } from './core/config';
+import { KV_MERGED_CONFIG, KV_MERGED_CONFIG_FULL, KV_MANUAL_SOURCES, KV_LAST_UPDATE, KV_MACCMS_SOURCES, KV_LIVE_SOURCES, KV_BLACKLIST, LIVE_PROXY_TTL, IMG_PROXY_TTL, KV_INLINE_PREFIX, KV_NAME_TRANSFORM, KV_CRON_INTERVAL, DEFAULT_CRON_INTERVAL, KV_SOURCE_HEALTH, KV_SPEED_TEST_ENABLED, KV_EDGE_PROXIES, KV_SEARCH_QUOTA_REPORT, KV_AGG_LOGS, KV_BG_SETTINGS, KV_DEDUP_CONFIG, KV_LIVE_DISABLED, KV_LIVE_MERGE_MODE, KV_SMART_BASE_URL_ENABLED, KV_SITE_PROBE_DEPTH, KV_SITE_AUTO_CLEAN, KV_SITE_HEALTH_MAP } from './core/config';
 import { getRequestBaseUrl, applyBaseUrlPlaceholder, assertHostAllowed } from './core/base-url';
 import { logger } from './core/logger';
 import { loadGroupOrder, saveGroupOrder } from './core/group-order';
@@ -1741,6 +1741,27 @@ export function createApp(deps: AppDeps): Hono {
     const body = await c.req.json<{ disabled: boolean }>();
     await storage.put(KV_LIVE_DISABLED, body.disabled ? 'true' : 'false');
     return c.json({ success: true, disabled: body.disabled });
+  });
+
+  // ─── 直播合并模式 ─────────────────────────────────────────
+  app.get('/admin/live-merge-mode', async (c) => {
+    const raw = await storage.get(KV_LIVE_MERGE_MODE);
+    return c.json({ mode: raw || 'separated' });
+  });
+
+  app.put('/admin/live-merge-mode', async (c) => {
+    if (config.adminToken) {
+      const auth = c.req.raw.headers.get('Authorization');
+      if (auth !== `Bearer ${config.adminToken}`) return c.json({ error: 'Unauthorized' }, 401);
+    }
+    if (deps.isSyncing?.()) {
+      return c.json({ error: 'Aggregation in progress, try later' }, 409);
+    }
+    const body = await c.req.json<{ mode: string }>();
+    const mode = body.mode === 'merged' ? 'merged' : 'separated';
+    await storage.put(KV_LIVE_MERGE_MODE, mode);
+    try { await deps.triggerRefresh(); } catch { /* best effort */ }
+    return c.json({ success: true, mode });
   });
 
   // ─── 智能 Base URL 开关 ──────────────────────────────────
